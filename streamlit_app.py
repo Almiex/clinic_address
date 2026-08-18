@@ -273,39 +273,50 @@ def _cell_to_str(x):
         return x.strftime('%d.%m.%Y')
     return str(x)
 
-def extract_date_range(df_raw):
-    """Ищем даты С: и ПО: в первых 10 строках (заголовок отчёта).
-
-    Обрабатывает и строковые ячейки ('01.01.2026'), и datetime ячейки
-    (Excel date → '2026-01-01 00:00:00' → '01.01.2026').
-    """
-    date_start_str = None
-    date_end_str = None
-
-    for i in range(min(10, len(df_raw))):
-        # Собираем строку с конвертацией datetime в dd.mm.yyyy
-        row_cells = [_cell_to_str(x) for x in df_raw.iloc[i] if pd.notna(x)]
-        row_text = ' '.join(row_cells)
-
-        m_start = re.search(r'[СC]\s*:\s*(\d{2}\.\d{2}\.\d{4})', row_text)
-        m_end = re.search(r'ПО\s*:\s*(\d{2}\.\d{2}\.\d{4})', row_text)
-
-        if m_start:
-            date_start_str = m_start.group(1)
-        if m_end:
-            date_end_str = m_end.group(1)
-
-    date_start = None
-    date_end = None
-    if date_start_str and date_end_str:
+def _extract_date_from_cell(cell_text):
+    """Ищет дату dd.mm.yyyy в тексте ячейки. Возвращает date или None."""
+    if not cell_text:
+        return None
+    s = cell_text.strip()
+    # Паттерны: 01.01.2026, 01-01-2026, 01/01/2026
+    m = re.search(r'(\d{1,2})[.\-/](\d{1,2})[.\-/](\d{4})', s)
+    if m:
+        d, mth, y = m.group(1), m.group(2), m.group(3)
         try:
-            date_start = datetime.strptime(date_start_str, '%d.%m.%Y').date()
-            date_end = datetime.strptime(date_end_str, '%d.%m.%Y').date()
+            return datetime(int(y), int(mth), int(d)).date()
         except ValueError:
             pass
+    return None
+
+def extract_date_range(df_raw):
+    """Ищем даты периода в первых 10 строках, первых 5 столбцах (заголовок отчёта).
+
+    Проверяем каждую ячейку отдельно — даты обычно в R3C1 (С:) и R3C2 (ПО:).
+    """
+    date_start = None
+    date_end = None
+
+    for i in range(min(10, len(df_raw))):
+        row = df_raw.iloc[i]
+        for j in range(min(5, len(row))):
+            cell = _cell_to_str(row.iloc[j])
+            if not cell:
+                continue
+            cell_lower = cell.lower()
+            d = _extract_date_from_cell(cell)
+            if d is None:
+                continue
+            # С: / С / начало / от
+            if any(k in cell_lower for k in ['с:', 'с ', 'начало', 'от ', 'с	']):
+                date_start = d
+            # ПО: / по / конец / до
+            elif any(k in cell_lower for k in ['по:', 'по ', 'конец', 'до ']):
+                date_end = d
 
     if date_start and date_end:
-        return f"Период анализа: {date_start_str} – {date_end_str}", date_start, date_end
+        s_str = date_start.strftime('%d.%m.%Y')
+        e_str = date_end.strftime('%d.%m.%Y')
+        return f"Период анализа: {s_str} – {e_str}", date_start, date_end
     return "", None, None
 
 def find_header_row(df_raw):
