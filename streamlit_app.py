@@ -62,6 +62,28 @@ def init_session_state():
         if key not in st.session_state:
             st.session_state[key] = val
 
+def is_missing(value, is_house=False):
+    """
+    Проверяет, является ли значение пустым/некорректным.
+    Для дома дополнительно проверяет наличие хотя бы одной буквы/цифры.
+    """
+    if pd.isna(value):
+        return True
+    s = str(value).strip().lower()
+    # Общие маркеры отсутствия данных
+    if s in ('', 'nan', 'none', 'null', '-', '—', '–', 'нет', 'отсутствует',
+             'б/н', 'бн', 'б.н.', 'б.н', '0', 'нет данных', 'не указан',
+             'без номера', 'б/д', 'бд', 'б.д.', 'б.д', 'н/д', 'нд'):
+        return True
+    if is_house:
+        # Дата вместо дома
+        if re.match(r'^\d{1,2}/\d{1,2}/\d{4}$', s):
+            return True
+        # Если нет ни одной буквы или цифры — дом некорректен
+        if not re.search(r'[a-zа-яё0-9]', s):
+            return True
+    return False
+
 def clean_part(text):
     if pd.isna(text):
         return ""
@@ -283,12 +305,13 @@ def process_excel(uploaded_file, clinic_city, clinic_street, clinic_house):
     df[col_street] = df[col_street].astype(str).replace('nan', '').replace('None', '')
     df[col_house] = df[col_house].astype(str).replace('nan', '').replace('None', '')
 
-    # --- Фильтр неполных адресов ---
+    # --- Фильтр неполных / некорректных адресов ---
+    # В когорту "Нет данных" отправляем, если отсутствует хотя бы одно
+    # обязательное поле: город, улица или номер дома (включая некорректные)
     bad_mask = (
-        (df[col_city].str.strip() == '') |
-        (df[col_street].str.strip() == '') |
-        (df[col_house].str.strip() == '') |
-        (df[col_house].str.match(r'^\d{1,2}/\d{1,2}/\d{4}$'))
+        df[col_city].apply(lambda x: is_missing(x)) |
+        df[col_street].apply(lambda x: is_missing(x)) |
+        df[col_house].apply(lambda x: is_missing(x, is_house=True))
     )
 
     df['is_valid'] = ~bad_mask
@@ -299,7 +322,17 @@ def process_excel(uploaded_file, clinic_city, clinic_street, clinic_house):
 
     df_good['norm_city'] = df_good[col_city].apply(normalize_city)
 
-    st.write(f"🚫 Исключено (неполный адрес) → 'Нет данных': **{len(excluded)}** чел.")
+    # Детализация причин исключения
+    missing_city = df[col_city].apply(lambda x: is_missing(x)).sum()
+    missing_street = df[col_street].apply(lambda x: is_missing(x)).sum()
+    missing_house = df[col_house].apply(lambda x: is_missing(x, is_house=True)).sum()
+
+    st.write(f"🚫 Исключено → 'Нет данных': **{len(excluded)}** чел.")
+    with st.expander("📋 Детализация причин исключения"):
+        st.write(f"   • Нет города: {missing_city}")
+        st.write(f"   • Нет улицы: {missing_street}")
+        st.write(f"   • Нет/некорректный дом: {missing_house}")
+        st.caption("Примечание: одна запись может попадать сразу в несколько категорий.")
     st.write(f"✅ Будет обработано: **{len(df_good)}** чел.")
 
     # --- Геокодирование ---
