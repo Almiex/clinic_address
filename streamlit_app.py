@@ -123,6 +123,31 @@ def find_col(cols, keys):
                 return c
     return None
 
+def find_date_col(cols):
+    """
+    Ищет колонку с датой обращения/визита/оплаты.
+    Явно исключает колонки с датой рождения и другими ложными совпадениями.
+    """
+    exclude = ['рожд', 'birth', 'д.р.', 'др ', 'д/р', 'дата рожд', 'date of birth', 'birthdate']
+    keys = [
+        'дата обращ', 'дата оплат', 'дата приёма', 'дата приема', 'дата визита',
+        'дата посещ', 'дата консул', 'дата процед', 'дата операц',
+        'дата заезда', 'дата выписк', 'дата планир', 'дата назнач',
+        'дата регистр', 'дата записи', 'дата событ', 'дата акт',
+        'date of visit', 'visit date', 'appointment date', 'service date',
+        'payment date', 'receipt date', 'admission date', 'discharge date'
+    ]
+    for c in cols:
+        c_lower = str(c).lower()
+        # Сначала проверяем исключения
+        if any(ex in c_lower for ex in exclude):
+            continue
+        # Теперь ищем ключи даты обращения
+        for k in keys:
+            if k in c_lower:
+                return c
+    return None
+
 def assign_segment(meters):
     if pd.isna(meters):
         return "Нет данных"
@@ -241,21 +266,30 @@ def sidebar():
 # ═══════════════════════════════════════════════════════════════════════
 
 def extract_date_range(df_raw):
-    """Ищем даты в первых 10 строках."""
-    date_start = None
-    date_end = None
+    """Ищем даты в первых 10 строках (заголовок отчёта)."""
+    date_start_str = None
+    date_end_str = None
     for i in range(min(10, len(df_raw))):
         row_text = ' '.join(str(x) for x in df_raw.iloc[i] if pd.notna(x))
         m_start = re.search(r'[СC]\s*:\s*(\d{2}\.\d{2}\.\d{4})', row_text)
         m_end = re.search(r'ПО\s*:\s*(\d{2}\.\d{2}\.\d{4})', row_text)
         if m_start:
-            date_start = m_start.group(1)
+            date_start_str = m_start.group(1)
         if m_end:
-            date_end = m_end.group(1)
+            date_end_str = m_end.group(1)
+
+    date_start = None
+    date_end = None
+    if date_start_str and date_end_str:
+        try:
+            date_start = datetime.strptime(date_start_str, '%d.%m.%Y').date()
+            date_end = datetime.strptime(date_end_str, '%d.%m.%Y').date()
+        except ValueError:
+            pass
 
     if date_start and date_end:
-        return f"Период анализа: {date_start} – {date_end}"
-    return ""
+        return f"Период анализа: {date_start_str} – {date_end_str}", date_start, date_end
+    return "", None, None
 
 def find_header_row(df_raw):
     """Автоопределение строки с заголовками."""
@@ -289,8 +323,10 @@ def process_excel(uploaded_file, clinic_city, clinic_street, clinic_house):
 
     df_raw = pd.read_excel(uploaded_file, sheet_name=sheet, header=None)
 
-    date_range_str = extract_date_range(df_raw)
+    date_range_str, report_start, report_end = extract_date_range(df_raw)
     st.session_state['date_range_str'] = date_range_str
+    st.session_state['report_date_start'] = report_start
+    st.session_state['report_date_end'] = report_end
     if date_range_str:
         st.success(f"📅 {date_range_str}")
 
@@ -313,7 +349,7 @@ def process_excel(uploaded_file, clinic_city, clinic_street, clinic_house):
     col_house = find_col(df.columns, ['дом'])
     col_serv = find_col(df.columns, ['усл', 'услуг'])
     col_sum = find_col(df.columns, ['сумма', 'оплат'])
-    col_date = find_col(df.columns, ['дата', 'date', 'дата обращ', 'дата оплат', 'дата приёма', 'дата визита'])
+    col_date = find_date_col(df.columns)
 
     st.session_state['col_map'] = {
         'city': col_city, 'street': col_street, 'house': col_house,
@@ -327,7 +363,9 @@ def process_excel(uploaded_file, clinic_city, clinic_street, clinic_house):
 
     st.write(f"🔎 Найдены колонки: город=`{col_city}`, улица=`{col_street}`, дом=`{col_house}`")
     if col_date:
-        st.write(f"📅 Найдена колонка дат: `{col_date}`")
+        st.write(f"📅 Найдена колонка дат обращений: `{col_date}`")
+    else:
+        st.info("ℹ️ Колонка с датами обращений/визитов не найдена — фильтр по датам будет недоступен.")
 
     df[col_city] = df[col_city].astype(str).replace('nan', '').replace('None', '')
     df[col_street] = df[col_street].astype(str).replace('nan', '').replace('None', '')
@@ -423,20 +461,13 @@ def process_excel(uploaded_file, clinic_city, clinic_street, clinic_house):
     st.write(f"📊 Успешно геокодировано: **{len(df_ok)}** из **{len(df_good)}** валидных")
     st.write(f"📊 Всего в отчёте: **{len(df)}** (включая **{len(excluded)}** без адреса)")
 
-    # --- Парсинг дат для фильтра ---
+    # --- Даты для фильтра берутся из заголовка отчёта, не из колонок данных ---
+    # (чтобы не путать дату рождения с датой визита)
     if col_date and col_date in df.columns:
         df[col_date] = pd.to_datetime(df[col_date], errors='coerce', dayfirst=True)
-        valid_dates = df[col_date].dropna()
-        if len(valid_dates) > 0:
-            st.session_state['min_date'] = valid_dates.min().date()
-            st.session_state['max_date'] = valid_dates.max().date()
-            st.write(f"📅 Диапазон дат в отчёте: **{st.session_state['min_date']}** – **{st.session_state['max_date']}**")
-        else:
-            st.session_state['min_date'] = None
-            st.session_state['max_date'] = None
+        st.write(f"📅 Найдена колонка дат визита/обращения: `{col_date}`")
     else:
-        st.session_state['min_date'] = None
-        st.session_state['max_date'] = None
+        st.info("ℹ️ Колонка с датами визита/обращения не найдена — фильтр по датам будет декларативным.")
 
     st.session_state['df_processed'] = df
     st.session_state['processing_done'] = True
@@ -709,37 +740,46 @@ def main():
         date_start = None
         date_end = None
 
-        if col_date and col_date in df_full.columns and st.session_state.get('min_date'):
+        report_start = st.session_state.get('report_date_start')
+        report_end = st.session_state.get('report_date_end')
+
+        if report_start and report_end:
             st.markdown("---")
             st.header("📅 Фильтр по датам")
+            st.caption(f"Диапазон отчёта: {report_start.strftime('%d.%m.%Y')} – {report_end.strftime('%d.%m.%Y')}")
 
             c1, c2 = st.columns(2)
             with c1:
                 date_start = st.date_input(
                     "Дата начала",
-                    value=st.session_state['min_date'],
-                    min_value=st.session_state['min_date'],
-                    max_value=st.session_state['max_date']
+                    value=report_start,
+                    min_value=report_start,
+                    max_value=report_end
                 )
             with c2:
                 date_end = st.date_input(
                     "Дата окончания",
-                    value=st.session_state['max_date'],
-                    min_value=st.session_state['min_date'],
-                    max_value=st.session_state['max_date']
+                    value=report_end,
+                    min_value=report_start,
+                    max_value=report_end
                 )
 
             if date_start > date_end:
                 st.error("❌ Дата начала не может быть позже даты окончания!")
                 st.stop()
 
-            mask = (df_full[col_date].dt.date >= date_start) & (df_full[col_date].dt.date <= date_end)
-            df = df_full[mask].copy()
-            st.write(f"📊 Отфильтровано: **{len(df)}** записей из **{len(df_full)}**")
+            # Фильтрация строк: если есть колонка с датой визита — фильтруем по ней
+            if col_date and col_date in df_full.columns:
+                mask = (df_full[col_date].dt.date >= date_start) & (df_full[col_date].dt.date <= date_end)
+                df = df_full[mask].copy()
+                st.write(f"📊 Отфильтровано: **{len(df)}** записей из **{len(df_full)}**")
+            else:
+                # Нет колонки дат визита — показываем все данные, но диапазон декларативный
+                df = df_full.copy()
+                st.info("ℹ️ Фильтр применён декларативно (в данных нет колонки с датами визита для фильтрации строк).")
         else:
             df = df_full.copy()
-            if not col_date:
-                st.info("ℹ️ Колонка с датами не найдена — фильтр по датам недоступен.")
+            st.info("ℹ️ Даты периода не найдены в заголовке отчёта — фильтр по датам недоступен.")
 
         # Пересчитываем агрегацию на лету
         agg = compute_agg(df, col_map)
