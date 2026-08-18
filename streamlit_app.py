@@ -768,77 +768,87 @@ def main():
         date_start = None
         date_end = None
 
-        report_start = st.session_state.get('report_date_start')
-        report_end = st.session_state.get('report_date_end')
+        # ═══════════════════════════════════════════════════════════
+        #  ФИЛЬТР ПО ДАТАМ — ЗАКОММЕНТИРОВАН (v1.2)
+        #  Требует колонки с датами визита/обращения в данных.
+        #  В текущем отчёте даты только в заголовке.
+        # ═══════════════════════════════════════════════════════════
+        # report_start = st.session_state.get('report_date_start')
+        # report_end = st.session_state.get('report_date_end')
+        # 
+        # df = df_full.copy()
+        # filter_active = False
+        # date_start = None
+        # date_end = None
+        # 
+        # if report_start and report_end:
+        #     st.markdown("---")
+        #     st.header("📅 Фильтр по датам")
+        #     st.caption(f"Диапазон отчёта: {report_start.strftime('%d.%m.%Y')} – {report_end.strftime('%d.%m.%Y')}")
+        #     
+        #     c1, c2, c3 = st.columns([2, 2, 1])
+        #     with c1:
+        #         date_start = st.date_input(
+        #             "Дата начала",
+        #             value=report_start,
+        #             min_value=report_start,
+        #             max_value=report_end,
+        #             key="filter_start_input"
+        #         )
+        #     with c2:
+        #         date_end = st.date_input(
+        #             "Дата окончания",
+        #             value=report_end,
+        #             min_value=report_start,
+        #             max_value=report_end,
+        #             key="filter_end_input"
+        #         )
+        #     with c3:
+        #         st.write("")
+        #         st.write("")
+        #         apply_clicked = st.button("🔍 Применить фильтр", use_container_width=True, key="apply_filter_btn")
+        #     
+        #     if apply_clicked:
+        #         if date_start > date_end:
+        #             st.error("❌ Дата начала не может быть позже даты окончания!")
+        #         else:
+        #             col_date = col_map.get('date')
+        #             if col_date and col_date in df_full.columns:
+        #                 mask = (df_full[col_date].dt.date >= date_start) & (df_full[col_date].dt.date <= date_end)
+        #                 st.session_state['filtered_df'] = df_full[mask].copy()
+        #                 st.session_state['filter_applied'] = True
+        #                 st.session_state['filter_start'] = date_start
+        #                 st.session_state['filter_end'] = date_end
+        #                 st.success(f"📊 Фильтр применён: **{len(st.session_state['filtered_df'])}** записей из **{len(df_full)}**")
+        #             else:
+        #                 st.session_state['filter_applied'] = False
+        #                 st.info("ℹ️ Колонка с датами визита не найдена — фильтр применён декларативно.")
+        #             st.rerun()
+        #     
+        #     if st.session_state.get('filter_applied') and st.session_state.get('filtered_df') is not None:
+        #         df = st.session_state['filtered_df']
+        #         date_start = st.session_state.get('filter_start')
+        #         date_end = st.session_state.get('filter_end')
+        #         filter_active = True
+        #         
+        #         c1, c2 = st.columns([3, 1])
+        #         with c1:
+        #             st.info(f"🔍 Активен фильтр: **{date_start} – {date_end}** | **{len(df)}** записей из **{len(df_full)}**")
+        #         with c2:
+        #             if st.button("❌ Сбросить фильтр", use_container_width=True, key="reset_filter_btn"):
+        #                 st.session_state['filter_applied'] = False
+        #                 st.session_state['filtered_df'] = None
+        #                 st.session_state['filter_start'] = None
+        #                 st.session_state['filter_end'] = None
+        #                 st.rerun()
+        # else:
+        #     st.info("ℹ️ Даты периода не найдены в заголовке отчёта — фильтр по датам недоступен.")
+        # ═══════════════════════════════════════════════════════════
 
         df = df_full.copy()
         filter_active = False
         date_start = None
         date_end = None
-
-        if report_start and report_end:
-            st.markdown("---")
-            st.header("📅 Фильтр по датам")
-            st.caption(f"Диапазон отчёта: {report_start.strftime('%d.%m.%Y')} – {report_end.strftime('%d.%m.%Y')}")
-
-            c1, c2, c3 = st.columns([2, 2, 1])
-            with c1:
-                date_start = st.date_input(
-                    "Дата начала",
-                    value=report_start,
-                    min_value=report_start,
-                    max_value=report_end,
-                    key="filter_start_input"
-                )
-            with c2:
-                date_end = st.date_input(
-                    "Дата окончания",
-                    value=report_end,
-                    min_value=report_start,
-                    max_value=report_end,
-                    key="filter_end_input"
-                )
-            with c3:
-                st.write("")
-                st.write("")
-                apply_clicked = st.button("🔍 Применить фильтр", use_container_width=True, key="apply_filter_btn")
-
-            if apply_clicked:
-                if date_start > date_end:
-                    st.error("❌ Дата начала не может быть позже даты окончания!")
-                else:
-                    col_date = col_map.get('date')
-                    if col_date and col_date in df_full.columns:
-                        mask = (df_full[col_date].dt.date >= date_start) & (df_full[col_date].dt.date <= date_end)
-                        st.session_state['filtered_df'] = df_full[mask].copy()
-                        st.session_state['filter_applied'] = True
-                        st.session_state['filter_start'] = date_start
-                        st.session_state['filter_end'] = date_end
-                        st.success(f"📊 Фильтр применён: **{len(st.session_state['filtered_df'])}** записей из **{len(df_full)}**")
-                    else:
-                        st.session_state['filter_applied'] = False
-                        st.info("ℹ️ Колонка с датами визита не найдена — фильтр применён декларативно.")
-                    st.rerun()
-
-            # Если фильтр уже был применён ранее — используем отфильтрованные данные
-            if st.session_state.get('filter_applied') and st.session_state.get('filtered_df') is not None:
-                df = st.session_state['filtered_df']
-                date_start = st.session_state.get('filter_start')
-                date_end = st.session_state.get('filter_end')
-                filter_active = True
-
-                c1, c2 = st.columns([3, 1])
-                with c1:
-                    st.info(f"🔍 Активен фильтр: **{date_start} – {date_end}** | **{len(df)}** записей из **{len(df_full)}**")
-                with c2:
-                    if st.button("❌ Сбросить фильтр", use_container_width=True, key="reset_filter_btn"):
-                        st.session_state['filter_applied'] = False
-                        st.session_state['filtered_df'] = None
-                        st.session_state['filter_start'] = None
-                        st.session_state['filter_end'] = None
-                        st.rerun()
-        else:
-            st.info("ℹ️ Даты периода не найдены в заголовке отчёта — фильтр по датам недоступен.")
 
         # Пересчитываем агрегацию на лету
         agg = compute_agg(df, col_map)
