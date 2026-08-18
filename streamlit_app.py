@@ -489,13 +489,13 @@ def process_excel(uploaded_file, clinic_city, clinic_street, clinic_house):
     st.write(f"📊 Успешно геокодировано: **{len(df_ok)}** из **{len(df_good)}** валидных")
     st.write(f"📊 Всего в отчёте: **{len(df)}** (включая **{len(excluded)}** без адреса)")
 
-    # --- Даты для фильтра берутся из заголовка отчёта, не из колонок данных ---
-    # (чтобы не путать дату рождения с датой визита)
-    if col_date and col_date in df.columns:
-        df[col_date] = pd.to_datetime(df[col_date], errors='coerce', dayfirst=True)
-        st.write(f"📅 Найдена колонка дат визита/обращения: `{col_date}`")
-    else:
-        st.info("ℹ️ Колонка с датами визита/обращения не найдена — фильтр по датам будет декларативным.")
+    # # --- Даты для фильтра берутся из заголовка отчёта, не из колонок данных ---
+    # # (чтобы не путать дату рождения с датой визита)
+    # if col_date and col_date in df.columns:
+    #     df[col_date] = pd.to_datetime(df[col_date], errors='coerce', dayfirst=True)
+    #     st.write(f"📅 Найдена колонка дат визита/обращения: `{col_date}`")
+    # else:
+    #     st.info("ℹ️ Колонка с датами визита/обращения не найдена — фильтр по датам будет декларативным.")
 
     st.session_state['df_processed'] = df
     st.session_state['processing_done'] = True
