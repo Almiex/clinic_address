@@ -161,12 +161,25 @@ def sidebar():
     if cache_file is not None:
         try:
             loaded_cache = json.load(cache_file)
-            st.session_state['cache'].update(loaded_cache)
-            st.sidebar.success(f"✅ Кэш загружен: {len(loaded_cache)} адресов")
+            added = 0
+            updated = 0
+            for addr, coords in loaded_cache.items():
+                # Умное слияние: не затираем существующие координаты пустыми значениями
+                if addr not in st.session_state['cache']:
+                    st.session_state['cache'][addr] = coords
+                    added += 1
+                elif st.session_state['cache'][addr] is None and coords is not None:
+                    st.session_state['cache'][addr] = coords
+                    updated += 1
+            msg = f"✅ Кэш загружен: +{added} новых"
+            if updated:
+                msg += f", {updated} исправлено"
+            st.sidebar.success(msg)
         except Exception as e:
             st.sidebar.error(f"Ошибка загрузки кэша: {e}")
 
-    st.sidebar.info(f"📍 Адресов в кэше: {len(st.session_state['cache'])}")
+    cache_size = len(st.session_state['cache'])
+    st.sidebar.info(f"📍 Адресов в кэше: **{cache_size}**")
 
     return clinic_city, clinic_street, clinic_house
 
@@ -608,9 +621,21 @@ def main():
             success = process_excel(uploaded_file, clinic_city, clinic_street, clinic_house)
             if success:
                 st.balloons()
+                cache_size = len(st.session_state['cache'])
+                st.info(
+                    f"📦 Обработка завершена. В кэше теперь **{cache_size}** адресов. "
+                    "Не забудьте скачать обновлённый geo_cache.json внизу страницы!"
+                )
 
     # Показываем результаты, если они есть
     if st.session_state['processing_done'] and st.session_state['agg'] is not None:
+        # Показываем баннер, если в кэше появились новые адреса
+        cache_size = len(st.session_state['cache'])
+        st.success(
+            f"🗺 Кэш геокодирования обновлён! Всего адресов в кэше: **{cache_size}**. "
+            "Обязательно скачайте geo_cache.json в разделе '💾 Экспорт данных' — "
+            "иначе при закрытии вкладки данные сгорят."
+        )
         show_dashboard()
         export_data()
 
