@@ -265,14 +265,31 @@ def sidebar():
 #  ОБРАБОТКА ДАННЫХ
 # ═══════════════════════════════════════════════════════════════════════
 
+def _cell_to_str(x):
+    """Конвертирует ячейку Excel в строку, datetime → dd.mm.yyyy."""
+    if pd.isna(x):
+        return ""
+    if isinstance(x, (pd.Timestamp, datetime)):
+        return x.strftime('%d.%m.%Y')
+    return str(x)
+
 def extract_date_range(df_raw):
-    """Ищем даты в первых 10 строках (заголовок отчёта)."""
+    """Ищем даты С: и ПО: в первых 10 строках (заголовок отчёта).
+
+    Обрабатывает и строковые ячейки ('01.01.2026'), и datetime ячейки
+    (Excel date → '2026-01-01 00:00:00' → '01.01.2026').
+    """
     date_start_str = None
     date_end_str = None
+
     for i in range(min(10, len(df_raw))):
-        row_text = ' '.join(str(x) for x in df_raw.iloc[i] if pd.notna(x))
+        # Собираем строку с конвертацией datetime в dd.mm.yyyy
+        row_cells = [_cell_to_str(x) for x in df_raw.iloc[i] if pd.notna(x)]
+        row_text = ' '.join(row_cells)
+
         m_start = re.search(r'[СC]\s*:\s*(\d{2}\.\d{2}\.\d{4})', row_text)
         m_end = re.search(r'ПО\s*:\s*(\d{2}\.\d{2}\.\d{4})', row_text)
+
         if m_start:
             date_start_str = m_start.group(1)
         if m_end:
