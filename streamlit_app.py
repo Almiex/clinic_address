@@ -489,18 +489,108 @@ def process_excel(uploaded_file, clinic_city, clinic_street, clinic_house):
     st.write(f"📊 Успешно геокодировано: **{len(df_ok)}** из **{len(df_good)}** валидных")
     st.write(f"📊 Всего в отчёте: **{len(df)}** (включая **{len(excluded)}** без адреса)")
 
-    # # --- Даты для фильтра берутся из заголовка отчёта, не из колонок данных ---
-    # # (чтобы не путать дату рождения с датой визита)
-    # if col_date and col_date in df.columns:
-    #     df[col_date] = pd.to_datetime(df[col_date], errors='coerce', dayfirst=True)
-    #     st.write(f"📅 Найдена колонка дат визита/обращения: `{col_date}`")
-    # else:
-    #     st.info("ℹ️ Колонка с датами визита/обращения не найдена — фильтр по датам будет декларативным.")
+    # --- Даты для фильтра берутся из заголовка отчёта, не из колонок данных ---
+    # (чтобы не путать дату рождения с датой визита)
+    if col_date and col_date in df.columns:
+        df[col_date] = pd.to_datetime(df[col_date], errors='coerce', dayfirst=True)
+        st.write(f"📅 Найдена колонка дат визита/обращения: `{col_date}`")
+    else:
+        st.info("ℹ️ Колонка с датами визита/обращения не найдена — фильтр по датам будет декларативным.")
 
     st.session_state['df_processed'] = df
     st.session_state['processing_done'] = True
 
     return True
+
+
+# ═══════════════════════════════════════════════════════════════════════
+#  КАРТА (Folium)
+# ═══════════════════════════════════════════════════════════════════════
+
+def build_map(df, clinic_coord, clinic_addr):
+    """Строит интерактивную карту с клиникой и точками пациентов."""
+
+    df_map = df[df['coords'].notna()].copy()
+    if len(df_map) == 0:
+        return None
+
+    df_map['lat'] = df_map['coords'].apply(lambda c: c[0] if c else None)
+    df_map['lon'] = df_map['coords'].apply(lambda c: c[1] if c else None)
+    df_map = df_map.dropna(subset=['lat', 'lon'])
+
+    if len(df_map) == 0:
+        return None
+
+    center = clinic_coord
+    m = folium.Map(location=center, zoom_start=12, tiles="CartoDB positron")
+
+    # Клиника
+    folium.Marker(
+        location=center,
+        popup="<b>🏥 Клиника</b><br>" + clinic_addr,
+        tooltip="Клиника",
+        icon=folium.Icon(color="red", icon="plus-sign", prefix="glyphicon")
+    ).add_to(m)
+
+    # Зоны вокруг клиники
+    for radius, color, label in [(2000, '#2ecc71', '2 км'), (5000, '#3498db', '5 км'), 
+                                  (7000, '#f1c40f', '7 км'), (10000, '#e67e22', '10 км')]:
+        folium.Circle(
+            location=center,
+            radius=radius,
+            color=color,
+            weight=1.5,
+            fill=True,
+            fill_color=color,
+            fill_opacity=0.08,
+            popup=label + " от клиники"
+        ).add_to(m)
+
+    # Кластеризация точек пациентов
+    marker_cluster = MarkerCluster(name="Пациенты").add_to(m)
+
+    for _, row in df_map.iterrows():
+        seg = row.get('segment', 'Нет данных')
+        color = COLORS_MAP.get(seg, '#95a5a6')
+        dist_km = row.get('distance_km', '—')
+        addr = row.get('geo_address', '—')
+
+        popup_html = (
+            "<b>Сегмент:</b> " + str(seg) + "<br>"
+            "<b>Расстояние:</b> " + str(dist_km) + " км<br>"
+            "<b>Адрес:</b> " + str(addr)
+        )
+
+        folium.CircleMarker(
+            location=[row['lat'], row['lon']],
+            radius=5,
+            color=color,
+            fill=True,
+            fill_color=color,
+            fill_opacity=0.7,
+            popup=folium.Popup(popup_html, max_width=300),
+            tooltip=str(seg) + " | " + str(dist_km) + " км"
+        ).add_to(marker_cluster)
+
+    # Легенда
+    legend_html = (
+        '<div style="position: fixed; bottom: 50px; left: 50px; width: 160px; '
+        'background-color: white; border:2px solid grey; z-index:9999; '
+        'font-size:12px; padding: 10px; border-radius: 6px; '
+        'box-shadow: 2px 2px 5px rgba(0,0,0,0.2);">'
+        '<b>Легенда</b><br>'
+        '<i style="color:#e74c3c;">●</i> Клиника<br>'
+        '<i style="color:#2ecc71;">●</i> 0–2 км<br>'
+        '<i style="color:#3498db;">●</i> 2–5 км<br>'
+        '<i style="color:#f1c40f;">●</i> 5–7 км<br>'
+        '<i style="color:#e67e22;">●</i> 7–10 км<br>'
+        '<i style="color:#e74c3c;">●</i> 10+ км<br>'
+        '<i style="color:#9b59b6;">●</i> Другие города<br>'
+        '</div>'
+    )
+    m.get_root().html.add_child(folium.Element(legend_html))
+
+    return m
 
 # ═══════════════════════════════════════════════════════════════════════
 #  ВИЗУАЛИЗАЦИЯ (Plotly)
@@ -641,6 +731,24 @@ def show_dashboard(df, agg, date_start=None, date_end=None):
             st.caption(f"Ось X ограничена {x_max:.1f} км. Выбросов за пределами: {len(outliers)} чел.")
     else:
         st.info("Нет данных для построения графика распределения")
+
+    # --- Карта ---
+    st.markdown("---")
+    st.subheader("🗺 Карта пациентов")
+
+    clinic_coord = st.session_state.get('clinic_coord')
+    clinic_addr = st.session_state.get('clinic_addr')
+
+    if clinic_coord and clinic_addr:
+        with st.spinner("🗺 Построение карты..."):
+            m = build_map(df, clinic_coord, clinic_addr)
+        if m:
+            st_folium(m, width=1200, height=700, returned_objects=[])
+            st.caption("💡 Нажмите на кластер, чтобы раскрыть точки. Цвета соответствуют сегментам удалённости.")
+        else:
+            st.warning("⚠️ Нет координат для построения карты.")
+    else:
+        st.warning("⚠️ Координаты клиники не найдены.")
 
 # ═══════════════════════════════════════════════════════════════════════
 #  ЭКСПОРТ ДАННЫХ
