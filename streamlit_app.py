@@ -13,7 +13,6 @@ import plotly.express as px
 import plotly.graph_objects as go
 from plotly.subplots import make_subplots
 import folium
-from folium.plugins import MarkerCluster
 from streamlit_folium import st_folium
 from geopy.geocoders import Photon, Nominatim
 from geopy.distance import geodesic
@@ -510,12 +509,15 @@ def process_excel(uploaded_file, clinic_city, clinic_street, clinic_house):
 #  КАРТА (Folium)
 # ═══════════════════════════════════════════════════════════════════════
 
-def build_map(df, clinic_coord, clinic_addr, max_per_segment=800):
-    """Строит интерактивную карту с клиникой и точками пациентов.
+def build_map(df, clinic_coord, clinic_addr, grid_precision=3):
+    """Строит карту с круговыми зонами-агрегатами.
 
-    Использует стратифицированное сэмплирование: из каждого сегмента
-    берётся до max_per_segment точек случайным образом. Это даёт
-    представительство всех зон удалённости — и ближних, и дальних.
+    Пациенты группируются по сетке (~500м ячейки).
+    Для каждой ячейки рисуется круг радиусом 500м:
+      • Цвет = сегмент удалённости (средний)
+      • Насыщенность/прозрачность = количество пациентов в ячейке
+
+    grid_precision: округление координат (3 ≈ 100-150м, 2 ≈ 1км)
     """
 
     df_map = df[df['coords'].apply(lambda c: isinstance(c, (list, tuple)) and len(c) == 2)].copy()
@@ -526,6 +528,18 @@ def build_map(df, clinic_coord, clinic_addr, max_per_segment=800):
 
     df_map['lat'] = df_map['coords'].apply(lambda c: c[0])
     df_map['lon'] = df_map['coords'].apply(lambda c: c[1])
+
+    # Группировка по сетке
+    df_map['grid_lat'] = df_map['lat'].round(grid_precision)
+    df_map['grid_lon'] = df_map['lon'].round(grid_precision)
+
+    grouped = df_map.groupby(['grid_lat', 'grid_lon']).agg(
+        center_lat=('lat', 'mean'),
+        center_lon=('lon', 'mean'),
+        count=('lat', 'count'),
+        avg_dist_km=('distance_km', 'mean'),
+        avg_dist_m=('distance_m', 'mean')
+    ).reset_index()
 
     center = clinic_coord
     m = folium.Map(location=center, zoom_start=11, tiles="OpenStreetMap")
@@ -538,7 +552,7 @@ def build_map(df, clinic_coord, clinic_addr, max_per_segment=800):
         icon=folium.Icon(color="red", icon="plus-sign", prefix="glyphicon")
     ).add_to(m)
 
-    # Зоны вокруг клиники
+    # Зоны вокруг клиники (контурные круги)
     for radius, color, label in [(2000, '#2ecc71', '2 км'), (5000, '#3498db', '5 км'),
                                   (7000, '#f1c40f', '7 км'), (10000, '#e67e22', '10 км')]:
         folium.Circle(
@@ -548,72 +562,59 @@ def build_map(df, clinic_coord, clinic_addr, max_per_segment=800):
             weight=1.5,
             fill=True,
             fill_color=color,
-            fill_opacity=0.06,
+            fill_opacity=0.04,
             popup=label + " от клиники"
         ).add_to(m)
 
-    # Стратифицированное сэмплирование: из каждого сегмента берём равномерно
-    sampled = []
-    for seg in SEGMENT_ORDER:
-        seg_df = df_map[df_map['segment'] == seg]
-        if len(seg_df) == 0:
-            continue
-        n = min(len(seg_df), max_per_segment)
-        if n < len(seg_df):
-            sampled.append(seg_df.sample(n=n, random_state=42))
-        else:
-            sampled.append(seg_df)
+    # Круговые зоны-агрегаты
+    max_count = grouped['count'].max()
 
-    if sampled:
-        df_map = pd.concat(sampled, ignore_index=True)
-    else:
-        df_map = df_map.iloc[:0]
-
-    # MarkerCluster — кластеризация для производительности
-    marker_cluster = MarkerCluster(name="Пациенты").add_to(m)
-
-    for _, row in df_map.iterrows():
-        seg = row.get('segment', 'Нет данных')
+    for _, row in grouped.iterrows():
+        seg = assign_segment(row['avg_dist_m'] * 1000)  # avg_dist_m уже в метрах
         color = COLORS_MAP.get(seg, '#95a5a6')
-        dist_km = row.get('distance_km', '—')
-        addr = row.get('geo_address', '—')
+
+        # Насыщенность: чем больше пациентов, тем непрозрачнее
+        opacity = min(0.15 + (row['count'] / max_count) * 0.55, 0.7)
 
         popup_html = (
-            "<b>Сегмент:</b> " + str(seg) + "<br>"
-            "<b>Расстояние:</b> " + str(dist_km) + " км<br>"
-            "<b>Адрес:</b> " + str(addr)
+            "<b>Пациентов в зоне:</b> " + str(int(row['count'])) + "<br>"
+            "<b>Среднее расстояние:</b> " + f"{row['avg_dist_km']:.1f}" + " км<br>"
+            "<b>Сегмент:</b> " + str(seg)
         )
 
-        folium.CircleMarker(
-            location=[row['lat'], row['lon']],
-            radius=5,
+        folium.Circle(
+            location=[row['center_lat'], row['center_lon']],
+            radius=500,  # 500 метров
             color=color,
+            weight=1,
             fill=True,
             fill_color=color,
-            fill_opacity=0.75,
-            popup=folium.Popup(popup_html, max_width=300),
-            tooltip=str(seg) + " | " + str(dist_km) + " км"
-        ).add_to(marker_cluster)
+            fill_opacity=opacity,
+            popup=folium.Popup(popup_html, max_width=250),
+            tooltip=f"{int(row['count'])} чел. | {row['avg_dist_km']:.1f} км"
+        ).add_to(m)
 
     # Легенда
     legend_html = (
-        '<div style="position: fixed; bottom: 50px; left: 50px; width: 160px; '
+        '<div style="position: fixed; bottom: 50px; left: 50px; width: 220px; '
         'background-color: white; border:2px solid grey; z-index:9999; '
         'font-size:12px; padding: 10px; border-radius: 6px; '
         'box-shadow: 2px 2px 5px rgba(0,0,0,0.2);">'
-        '<b>Легенда</b><br>'
+        '<b>Легенда зон</b><br>'
         '<i style="color:#e74c3c;">●</i> 🏥 Клиника<br>'
-        '<i style="color:#2ecc71;">●</i> 0–2 км<br>'
-        '<i style="color:#3498db;">●</i> 2–5 км<br>'
-        '<i style="color:#f1c40f;">●</i> 5–7 км<br>'
-        '<i style="color:#e67e22;">●</i> 7–10 км<br>'
-        '<i style="color:#e74c3c;">●</i> 10+ км<br>'
-        '<i style="color:#9b59b6;">●</i> Другие города<br>'
+        '<i style="color:#2ecc71;">●</i> 0–2 км (зелёный)<br>'
+        '<i style="color:#3498db;">●</i> 2–5 км (синий)<br>'
+        '<i style="color:#f1c40f;">●</i> 5–7 км (жёлтый)<br>'
+        '<i style="color:#e67e22;">●</i> 7–10 км (оранж.)<br>'
+        '<i style="color:#e74c3c;">●</i> 10+ км (красный)<br>'
+        '<i style="color:#9b59b6;">●</i> Другие города (фиол.)<br>'
+        '<hr style="margin:5px 0;">'
+        '<i>Насыщенность = плотность пациентов</i>'
         '</div>'
     )
     m.get_root().html.add_child(folium.Element(legend_html))
 
-    return m, len(df_map)
+    return m, len(grouped)
 
 # ═══════════════════════════════════════════════════════════════════════
 #  ВИЗУАЛИЗАЦИЯ (Plotly)
@@ -774,7 +775,7 @@ def show_dashboard(df, agg, date_start=None, date_end=None):
             else:
                 st.write(f"📍 Точек на карте: **{shown}**")
             st_folium(m, width=1200, height=700, key="patient_map")
-            st.caption("💡 Нажмите на кластер, чтобы раскрыть точки. Цвета соответствуют сегментам удалённости. Приблизьте для деталей.")
+            st.caption("💡 Каждый круг — зона ~500м. Цвет = сегмент удалённости, насыщенность = количество пациентов. Нажмите на круг для деталей.")
         else:
             st.warning("⚠️ Нет координат для построения карты.")
     else:
