@@ -13,7 +13,7 @@ import plotly.express as px
 import plotly.graph_objects as go
 from plotly.subplots import make_subplots
 import folium
-from folium.plugins import MarkerCluster, HeatMap
+from folium.plugins import FastMarkerCluster
 from streamlit_folium import st_folium
 from geopy.geocoders import Photon, Nominatim
 from geopy.distance import geodesic
@@ -510,11 +510,11 @@ def process_excel(uploaded_file, clinic_city, clinic_street, clinic_house):
 #  КАРТА (Folium)
 # ═══════════════════════════════════════════════════════════════════════
 
-def build_map(df, clinic_coord, clinic_addr, mode="heatmap", max_points=2000):
+def build_map(df, clinic_coord, clinic_addr, max_points=5000):
     """Строит интерактивную карту с клиникой и точками пациентов.
 
-    mode: 'heatmap' — тепловая карта (быстро, для больших данных)
-          'points'   — точки с кластеризацией (медленно, сэмплируется)
+    Использует FastMarkerCluster (Canvas-рендеринг) для производительности
+    и цветные точки по сегментам удалённости.
     """
 
     df_map = df[df['coords'].apply(lambda c: isinstance(c, (list, tuple)) and len(c) == 2)].copy()
@@ -527,9 +527,9 @@ def build_map(df, clinic_coord, clinic_addr, mode="heatmap", max_points=2000):
     df_map['lon'] = df_map['coords'].apply(lambda c: c[1])
 
     center = clinic_coord
-    m = folium.Map(location=center, zoom_start=12, tiles="CartoDB positron")
+    m = folium.Map(location=center, zoom_start=12, tiles="OpenStreetMap")
 
-    # Клиника
+    # Клиника — красная иконка
     folium.Marker(
         location=center,
         popup="<b>🏥 Клиника</b><br>" + str(clinic_addr),
@@ -537,65 +537,79 @@ def build_map(df, clinic_coord, clinic_addr, mode="heatmap", max_points=2000):
         icon=folium.Icon(color="red", icon="plus-sign", prefix="glyphicon")
     ).add_to(m)
 
-    if mode == "heatmap":
-        # HeatMap — быстро, работает с тысячами точек
-        heat_data = df_map[['lat', 'lon']].values.tolist()
-        HeatMap(
-            heat_data,
-            radius=15,
-            blur=25,
-            max_zoom=13,
-            gradient={0.2: '#3498db', 0.4: '#2ecc71', 0.6: '#f1c40f', 0.8: '#e67e22', 1.0: '#e74c3c'}
+    # Зоны вокруг клиники (полупрозрачные круги)
+    for radius, color, label in [(2000, '#2ecc71', '2 км'), (5000, '#3498db', '5 км'),
+                                  (7000, '#f1c40f', '7 км'), (10000, '#e67e22', '10 км')]:
+        folium.Circle(
+            location=center,
+            radius=radius,
+            color=color,
+            weight=1.5,
+            fill=True,
+            fill_color=color,
+            fill_opacity=0.06,
+            popup=label + " от клиники"
         ).add_to(m)
-        shown = total_points
-    else:
-        # Точки — сэмплируем, если слишком много
-        if total_points > max_points:
-            df_map = df_map.sample(n=max_points, random_state=42)
 
-        marker_cluster = MarkerCluster(name="Пациенты").add_to(m)
+    # Сэмплирование: приоритет ближним точкам, чтобы не потерять важные данные
+    if total_points > max_points:
+        # Берём все точки в пределах 10 км + случайная выборка из остальных
+        close_mask = df_map['distance_km'] <= 10
+        close_points = df_map[close_mask]
+        far_points = df_map[~close_mask]
 
-        for _, row in df_map.iterrows():
-            seg = row.get('segment', 'Нет данных')
-            color = COLORS_MAP.get(seg, '#95a5a6')
-            dist_km = row.get('distance_km', '—')
-            addr = row.get('geo_address', '—')
+        remaining = max_points - len(close_points)
+        if remaining > 0 and len(far_points) > 0:
+            far_sample = far_points.sample(n=min(remaining, len(far_points)), random_state=42)
+            df_map = pd.concat([close_points, far_sample])
+        else:
+            df_map = close_points if len(close_points) <= max_points else close_points.sample(n=max_points, random_state=42)
 
-            popup_html = (
-                "<b>Сегмент:</b> " + str(seg) + "<br>"
-                "<b>Расстояние:</b> " + str(dist_km) + " км<br>"
-                "<b>Адрес:</b> " + str(addr)
-            )
+    # FastMarkerCluster — Canvas-рендеринг, работает быстро даже с тысячами точек
+    marker_cluster = FastMarkerCluster(name="Пациенты").add_to(m)
 
-            folium.CircleMarker(
-                location=[row['lat'], row['lon']],
-                radius=5,
-                color=color,
-                fill=True,
-                fill_color=color,
-                fill_opacity=0.7,
-                popup=folium.Popup(popup_html, max_width=300),
-                tooltip=str(seg) + " | " + str(dist_km) + " км"
-            ).add_to(marker_cluster)
-        shown = len(df_map)
+    for _, row in df_map.iterrows():
+        seg = row.get('segment', 'Нет данных')
+        color = COLORS_MAP.get(seg, '#95a5a6')
+        dist_km = row.get('distance_km', '—')
+        addr = row.get('geo_address', '—')
 
-    # Легенда
+        popup_html = (
+            "<b>Сегмент:</b> " + str(seg) + "<br>"
+            "<b>Расстояние:</b> " + str(dist_km) + " км<br>"
+            "<b>Адрес:</b> " + str(addr)
+        )
+
+        folium.CircleMarker(
+            location=[row['lat'], row['lon']],
+            radius=5,
+            color=color,
+            fill=True,
+            fill_color=color,
+            fill_opacity=0.75,
+            popup=folium.Popup(popup_html, max_width=300),
+            tooltip=str(seg) + " | " + str(dist_km) + " км"
+        ).add_to(marker_cluster)
+
+    # Легенда по сегментам
     legend_html = (
-        '<div style="position: fixed; bottom: 50px; left: 50px; width: 180px; '
+        '<div style="position: fixed; bottom: 50px; left: 50px; width: 160px; '
         'background-color: white; border:2px solid grey; z-index:9999; '
         'font-size:12px; padding: 10px; border-radius: 6px; '
         'box-shadow: 2px 2px 5px rgba(0,0,0,0.2);">'
         '<b>Легенда</b><br>'
-        '<i style="color:#e74c3c;">●</i> Клиника<br>'
-        '<i style="color:#3498db;">●</i> HeatMap (холодно)<br>'
-        '<i style="color:#2ecc71;">●</i> HeatMap (тепло)<br>'
-        '<i style="color:#e67e22;">●</i> HeatMap (горячо)<br>'
-        '<i style="color:#e74c3c;">●</i> HeatMap (пик)<br>'
+        '<i style="color:#e74c3c;">●</i> 🏥 Клиника<br>'
+        '<i style="color:#2ecc71;">●</i> 0–2 км<br>'
+        '<i style="color:#3498db;">●</i> 2–5 км<br>'
+        '<i style="color:#f1c40f;">●</i> 5–7 км<br>'
+        '<i style="color:#e67e22;">●</i> 7–10 км<br>'
+        '<i style="color:#e74c3c;">●</i> 10+ км<br>'
+        '<i style="color:#9b59b6;">●</i> Другие города<br>'
         '</div>'
     )
     m.get_root().html.add_child(folium.Element(legend_html))
 
-    return m, shown
+    return m, len(df_map)
 
 # ═══════════════════════════════════════════════════════════════════════
 #  ВИЗУАЛИЗАЦИЯ (Plotly)
@@ -747,31 +761,16 @@ def show_dashboard(df, agg, date_start=None, date_end=None):
     if clinic_coord and clinic_addr:
         total_valid = len(df[df['coords'].apply(lambda c: isinstance(c, (list, tuple)) and len(c) == 2)])
 
-        # Выбор режима
-        c1, c2 = st.columns([1, 3])
-        with c1:
-            map_mode = st.radio(
-                "Режим карты",
-                options=["heatmap", "points"],
-                format_func=lambda x: "🔥 Тепловая карта" if x == "heatmap" else "📍 Точки",
-                key="map_mode_radio"
-            )
-        with c2:
-            if map_mode == "points" and total_valid > 2000:
-                st.info(f"ℹ️ Для точек показано максимум 2000 из {total_valid} точек (случайная выборка). Для всех точек используйте HeatMap.")
-            elif map_mode == "heatmap":
-                st.info(f"ℹ️ Тепловая карта показывает плотность всех {total_valid} точек.")
-
         with st.spinner("🗺 Построение карты..."):
-            m, shown = build_map(df, clinic_coord, clinic_addr, mode=map_mode)
+            m, shown = build_map(df, clinic_coord, clinic_addr)
 
         if m:
-            st.write(f"📍 Точек на карте: **{shown}** из **{total_valid}**")
-            st_folium(m, width=1200, height=700, key=f"patient_map_{map_mode}")
-            if map_mode == "points":
-                st.caption("💡 Нажмите на кластер, чтобы раскрыть точки. Цвета соответствуют сегментам удалённости.")
+            if shown < total_valid:
+                st.info(f"ℹ️ Показано **{shown}** точек из **{total_valid}** (приоритет — ближайшие к клинике).")
             else:
-                st.caption("💡 Красный = высокая плотность пациентов, синий = низкая. Приблизьте для деталей.")
+                st.write(f"📍 Точек на карте: **{shown}**")
+            st_folium(m, width=1200, height=700, key="patient_map")
+            st.caption("💡 Нажмите на кластер, чтобы раскрыть точки. Цвета соответствуют сегментам удалённости. Приблизьте для деталей.")
         else:
             st.warning("⚠️ Нет координат для построения карты.")
     else:
