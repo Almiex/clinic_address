@@ -509,15 +509,15 @@ def process_excel(uploaded_file, clinic_city, clinic_street, clinic_house):
 #  КАРТА (Folium)
 # ═══════════════════════════════════════════════════════════════════════
 
-def build_map(df, clinic_coord, clinic_addr, grid_precision=3):
+def build_map(df, clinic_coord, clinic_addr, grid_precision=2):
     """Строит карту с круговыми зонами-агрегатами.
 
-    Пациенты группируются по сетке (~500м ячейки).
-    Для каждой ячейки рисуется круг радиусом 500м:
+    Пациенты группируются по сетке (~1.1 км ячейки при precision=2).
+    Для каждой ячейки рисуется круг:
       • Цвет = сегмент удалённости (средний)
-      • Насыщенность/прозрачность = количество пациентов в ячейке
+      • Насыщенность = количество пациентов в ячейке
 
-    grid_precision: округление координат (3 ≈ 100-150м, 2 ≈ 1км)
+    Использует Canvas-рендеринг Leaflet для производительности.
     """
 
     df_map = df[df['coords'].apply(lambda c: isinstance(c, (list, tuple)) and len(c) == 2)].copy()
@@ -529,7 +529,7 @@ def build_map(df, clinic_coord, clinic_addr, grid_precision=3):
     df_map['lat'] = df_map['coords'].apply(lambda c: c[0])
     df_map['lon'] = df_map['coords'].apply(lambda c: c[1])
 
-    # Группировка по сетке
+    # Группировка по крупной сетке (~1.1 км)
     df_map['grid_lat'] = df_map['lat'].round(grid_precision)
     df_map['grid_lon'] = df_map['lon'].round(grid_precision)
 
@@ -542,7 +542,13 @@ def build_map(df, clinic_coord, clinic_addr, grid_precision=3):
     ).reset_index()
 
     center = clinic_coord
-    m = folium.Map(location=center, zoom_start=11, tiles="OpenStreetMap")
+    # Canvas renderer — в разы быстрее SVG при большом количестве объектов
+    m = folium.Map(
+        location=center,
+        zoom_start=11,
+        tiles="OpenStreetMap",
+        prefer_canvas=True
+    )
 
     # Клиника
     folium.Marker(
@@ -552,29 +558,16 @@ def build_map(df, clinic_coord, clinic_addr, grid_precision=3):
         icon=folium.Icon(color="red", icon="plus-sign", prefix="glyphicon")
     ).add_to(m)
 
-    # Зоны вокруг клиники (контурные круги)
-    for radius, color, label in [(2000, '#2ecc71', '2 км'), (5000, '#3498db', '5 км'),
-                                  (7000, '#f1c40f', '7 км'), (10000, '#e67e22', '10 км')]:
-        folium.Circle(
-            location=center,
-            radius=radius,
-            color=color,
-            weight=1.5,
-            fill=True,
-            fill_color=color,
-            fill_opacity=0.04,
-            popup=label + " от клиники"
-        ).add_to(m)
-
     # Круговые зоны-агрегаты
     max_count = grouped['count'].max()
 
     for _, row in grouped.iterrows():
-        seg = assign_segment(row['avg_dist_m'] * 1000)  # avg_dist_m уже в метрах
+        # ИСПРАВЛЕНО: avg_dist_m уже в метрах, не умножаем
+        seg = assign_segment(row['avg_dist_m'])
         color = COLORS_MAP.get(seg, '#95a5a6')
 
         # Насыщенность: чем больше пациентов, тем непрозрачнее
-        opacity = min(0.15 + (row['count'] / max_count) * 0.55, 0.7)
+        opacity = min(0.25 + (row['count'] / max_count) * 0.50, 0.75)
 
         popup_html = (
             "<b>Пациентов в зоне:</b> " + str(int(row['count'])) + "<br>"
@@ -582,11 +575,12 @@ def build_map(df, clinic_coord, clinic_addr, grid_precision=3):
             "<b>Сегмент:</b> " + str(seg)
         )
 
+        # Радиус 700м — крупнее, меньше кругов, меньше перекрытий
         folium.Circle(
             location=[row['center_lat'], row['center_lon']],
-            radius=500,  # 500 метров
+            radius=700,
             color=color,
-            weight=1,
+            weight=1.5,
             fill=True,
             fill_color=color,
             fill_opacity=opacity,
