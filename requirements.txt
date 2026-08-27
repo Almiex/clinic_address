@@ -7,3 +7,5 @@ geopy>=2.3.0
 scipy>=1.10.0
 openpyxl>=3.1.0
 plotly>=5.18.0
+folium>=0.14.0
+streamlit-folium>=0.15.0
