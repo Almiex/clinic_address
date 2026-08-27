@@ -513,30 +513,28 @@ def process_excel(uploaded_file, clinic_city, clinic_street, clinic_house):
 def build_map(df, clinic_coord, clinic_addr):
     """Строит интерактивную карту с клиникой и точками пациентов."""
 
-    df_map = df[df['coords'].notna()].copy()
-    if len(df_map) == 0:
-        return None
-
-    df_map['lat'] = df_map['coords'].apply(lambda c: c[0] if c else None)
-    df_map['lon'] = df_map['coords'].apply(lambda c: c[1] if c else None)
-    df_map = df_map.dropna(subset=['lat', 'lon'])
+    # Фильтруем только записи с валидными координатами
+    df_map = df[df['coords'].apply(lambda c: isinstance(c, (list, tuple)) and len(c) == 2)].copy()
 
     if len(df_map) == 0:
         return None
+
+    df_map['lat'] = df_map['coords'].apply(lambda c: c[0])
+    df_map['lon'] = df_map['coords'].apply(lambda c: c[1])
 
     center = clinic_coord
-    m = folium.Map(location=center, zoom_start=12, tiles="CartoDB positron")
+    m = folium.Map(location=center, zoom_start=12, tiles="OpenStreetMap")
 
     # Клиника
     folium.Marker(
         location=center,
-        popup="<b>🏥 Клиника</b><br>" + clinic_addr,
+        popup="<b>🏥 Клиника</b><br>" + str(clinic_addr),
         tooltip="Клиника",
         icon=folium.Icon(color="red", icon="plus-sign", prefix="glyphicon")
     ).add_to(m)
 
     # Зоны вокруг клиники
-    for radius, color, label in [(2000, '#2ecc71', '2 км'), (5000, '#3498db', '5 км'), 
+    for radius, color, label in [(2000, '#2ecc71', '2 км'), (5000, '#3498db', '5 км'),
                                   (7000, '#f1c40f', '7 км'), (10000, '#e67e22', '10 км')]:
         folium.Circle(
             location=center,
@@ -746,7 +744,8 @@ def show_dashboard(df, agg, date_start=None, date_end=None):
         with st.spinner("🗺 Построение карты..."):
             m = build_map(df, clinic_coord, clinic_addr)
         if m:
-            st_folium(m, width=1200, height=700, returned_objects=[])
+            st.write(f"📍 Точек на карте: **{len(df[df['coords'].apply(lambda c: isinstance(c, (list, tuple)) and len(c) == 2)])}**")
+            st_folium(m, width=1200, height=700, key="patient_map")
             st.caption("💡 Нажмите на кластер, чтобы раскрыть точки. Цвета соответствуют сегментам удалённости.")
         else:
             st.warning("⚠️ Нет координат для построения карты.")
