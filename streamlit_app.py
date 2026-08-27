@@ -13,6 +13,7 @@ import plotly.express as px
 import plotly.graph_objects as go
 from plotly.subplots import make_subplots
 import folium
+from folium.plugins import MarkerCluster
 from streamlit_folium import st_folium
 from geopy.geocoders import Photon, Nominatim
 from geopy.distance import geodesic
@@ -509,11 +510,12 @@ def process_excel(uploaded_file, clinic_city, clinic_street, clinic_house):
 #  КАРТА (Folium)
 # ═══════════════════════════════════════════════════════════════════════
 
-def build_map(df, clinic_coord, clinic_addr, max_points=1500):
+def build_map(df, clinic_coord, clinic_addr, max_per_segment=800):
     """Строит интерактивную карту с клиникой и точками пациентов.
 
-    Точки рисуются напрямую на карту (без кластеризации) для стабильности.
-    Приоритет — ближайшие к клинике точки.
+    Использует стратифицированное сэмплирование: из каждого сегмента
+    берётся до max_per_segment точек случайным образом. Это даёт
+    представительство всех зон удалённости — и ближних, и дальних.
     """
 
     df_map = df[df['coords'].apply(lambda c: isinstance(c, (list, tuple)) and len(c) == 2)].copy()
@@ -526,7 +528,7 @@ def build_map(df, clinic_coord, clinic_addr, max_points=1500):
     df_map['lon'] = df_map['coords'].apply(lambda c: c[1])
 
     center = clinic_coord
-    m = folium.Map(location=center, zoom_start=12, tiles="OpenStreetMap")
+    m = folium.Map(location=center, zoom_start=11, tiles="OpenStreetMap")
 
     # Клиника
     folium.Marker(
@@ -550,11 +552,26 @@ def build_map(df, clinic_coord, clinic_addr, max_points=1500):
             popup=label + " от клиники"
         ).add_to(m)
 
-    # Сэмплирование: сортируем по расстоянию, берём ближайшие max_points
-    if total_points > max_points:
-        df_map = df_map.sort_values('distance_km', na_position='last').head(max_points)
+    # Стратифицированное сэмплирование: из каждого сегмента берём равномерно
+    sampled = []
+    for seg in SEGMENT_ORDER:
+        seg_df = df_map[df_map['segment'] == seg]
+        if len(seg_df) == 0:
+            continue
+        n = min(len(seg_df), max_per_segment)
+        if n < len(seg_df):
+            sampled.append(seg_df.sample(n=n, random_state=42))
+        else:
+            sampled.append(seg_df)
 
-    # Рисуем точки напрямую на карту (без кластеризации — стабильнее)
+    if sampled:
+        df_map = pd.concat(sampled, ignore_index=True)
+    else:
+        df_map = df_map.iloc[:0]
+
+    # MarkerCluster — кластеризация для производительности
+    marker_cluster = MarkerCluster(name="Пациенты").add_to(m)
+
     for _, row in df_map.iterrows():
         seg = row.get('segment', 'Нет данных')
         color = COLORS_MAP.get(seg, '#95a5a6')
@@ -569,14 +586,14 @@ def build_map(df, clinic_coord, clinic_addr, max_points=1500):
 
         folium.CircleMarker(
             location=[row['lat'], row['lon']],
-            radius=4,
+            radius=5,
             color=color,
             fill=True,
             fill_color=color,
-            fill_opacity=0.7,
+            fill_opacity=0.75,
             popup=folium.Popup(popup_html, max_width=300),
             tooltip=str(seg) + " | " + str(dist_km) + " км"
-        ).add_to(m)
+        ).add_to(marker_cluster)
 
     # Легенда
     legend_html = (
